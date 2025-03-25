@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Cash Budget Expense Allocator</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    textarea, input { width: 100%; margin-bottom: 1em; }
+    .list { margin-bottom: 2em; }
+    .expense-item { cursor: pointer; padding: 4px; display: flex; gap: 2em; }
+    .expense-item:hover { background-color: #f0f0f0; }
+    .expense-amount { min-width: 80px; }
+  
+    #toast {
+      visibility: hidden;
+      min-width: 120px;
+      background-color: #333;
+      color: #fff;
+      text-align: center;
+      border-radius: 4px;
+      padding: 8px;
+      position: fixed;
+      z-index: 1000;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.9em;
+    }
+    #toast.show {
+      visibility: visible;
+      animation: fadein 0.3s, fadeout 0.3s 1.7s;
+    }
+    @keyframes fadein {
+      from { bottom: 0; opacity: 0; }
+      to { bottom: 20px; opacity: 1; }
+    }
+    @keyframes fadeout {
+      from { bottom: 20px; opacity: 1; }
+      to { bottom: 0; opacity: 0; }
+    }
+   </style> 
+</head>
+<body>
+  <h1>Cash Budget Expense Allocator</h1>
+
+  <label>Expenses (OneNote List):</label>
+  <textarea id="expensesInput" rows="10"></textarea>
+
+  <label>Cash Budget in EUR:</label>
+  <input type="number" id="budgetInput" step="0.01">
+
+  <button onclick="allocateExpenses()">Allocate</button>
+  <button onclick="resetAllocator()">Reset</button>
+
+  <div class="list">
+    <h2>Allocated Expenses</h2>
+    <ul id="allocatedList"></ul>
+  </div>
+
+  <div class="list">
+    <h2>Leftover Expenses</h2>
+    <ul id="leftoverList"></ul>
+  </div>
+
+  <script>
+    let leftoverExpenses = [];
+
+    function normalizeCategory(desc) {
+      return desc.trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/(^|\s)([a-zäöüß])/g, function (_, sep, char) {
+          return sep + char.toUpperCase();
+        });
+    }
+
+
+    function parseExpenses(input) {
+      return input.split('\n')
+        .map(line => line.replace(/^\s*[•\-\*]?\s*/, '').trim())
+        .filter(Boolean)
+        .map(line => {
+          const match = line.match(/^([\d,\.]+)\s+(.+)$/);
+          if (!match) return null;
+          const amount = parseFloat(match[1].replace(',', '.'));
+          const description = match[2];
+          const category = normalizeCategory(description);
+          return { amount, description, category, raw: line };
+        })
+        .filter(Boolean);
+    }
+
+    function mergeByCategory(expenses) {
+      const merged = {};
+      for (const exp of expenses) {
+        if (!merged[exp.category]) {
+          merged[exp.category] = { amount: 0, category: exp.category, description: exp.category };
+        }
+        merged[exp.category].amount += exp.amount;
+      }
+      return Object.values(merged);
+    }
+
+    function allocateExpenses() {
+      const budget = parseFloat(document.getElementById('budgetInput').value);
+      const expensesInput = document.getElementById('expensesInput');
+      const inputText = expensesInput.value;
+
+      if (!budget || budget <= 0) {
+        alert("Please enter a valid budget.");
+        return;
+      }
+
+      expensesInput.disabled = true;
+
+      const allExpenses = leftoverExpenses.length > 0 ? leftoverExpenses : parseExpenses(inputText);
+
+      const categorySums = {};
+      for (const exp of allExpenses) {
+        if (!categorySums[exp.category]) categorySums[exp.category] = 0;
+        categorySums[exp.category] += exp.amount;
+      }
+
+      const allocated = [];
+      const remaining = [];
+      let budgetRemaining = budget;
+
+      for (const [category, totalAmount] of Object.entries(categorySums)) {
+        if (budgetRemaining <= 0) {
+          remaining.push({ amount: totalAmount, category, description: category });
+        } else if (totalAmount <= budgetRemaining) {
+          allocated.push({ amount: totalAmount, category, description: category });
+          budgetRemaining -= totalAmount;
+        } else {
+          allocated.push({ amount: budgetRemaining, category, description: category });
+          remaining.push({ amount: totalAmount - budgetRemaining, category, description: category });
+          budgetRemaining = 0;
+        }
+      }
+
+      leftoverExpenses = allExpenses.length > 0 ? remaining.flatMap(r => [{ amount: r.amount, description: r.category, category: r.category, raw: r.amount + ' ' + r.category }]) : [];
+
+      renderFlatList('allocatedList', allocated);
+      renderFlatList('leftoverList', remaining);
+    }
+
+    function resetAllocator() {
+      leftoverExpenses = [];
+      document.getElementById('expensesInput').disabled = false;
+      document.getElementById('expensesInput').value = '';
+      document.getElementById('budgetInput').value = '';
+      document.getElementById('allocatedList').innerHTML = '';
+      document.getElementById('leftoverList').innerHTML = '';
+    }
+
+    function copyToClipboard(text) {
+      const tempInput = document.createElement('textarea');
+      tempInput.value = text;
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      document.execCommand('copy');
+      document.body.removeChild(tempInput);
+    
+      const toast = document.getElementById('toast');
+      toast.className = 'show';
+      setTimeout(() => { toast.className = toast.className.replace('show', ''); }, 2000);
+    }
+
+    function renderFlatList(containerId, expenses) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+
+      let total = 0;
+
+      expenses.sort((a, b) => a.category.localeCompare(b.category)).forEach(expense => {
+        const li = document.createElement('li');
+        li.className = 'expense-item';
+
+        const amountSpan = document.createElement('span');
+        amountSpan.className = 'expense-amount';
+        amountSpan.textContent = expense.amount.toFixed(2).replace(',', '.');
+
+        const categorySpan = document.createElement('span');
+        categorySpan.className = 'expense-category';
+        categorySpan.textContent = expense.category;
+
+        li.appendChild(categorySpan);
+        li.appendChild(amountSpan);
+
+        categorySpan.onclick = () => {
+          copyToClipboard(categorySpan.textContent);
+        };
+
+        amountSpan.onclick = () => {
+          copyToClipboard(amountSpan.textContent);
+        };
+        
+
+        container.appendChild(li);
+
+        total += expense.amount;
+      });
+
+      const totalLi = document.createElement('li');
+      totalLi.className = 'expense-item';
+      totalLi.style.fontWeight = 'bold';
+
+      const totalAmount = document.createElement('span');
+      totalAmount.className = 'expense-amount';
+      totalAmount.textContent = total.toFixed(2).replace(',', '.');
+
+      const totalLabel = document.createElement('span');
+      totalLabel.className = 'expense-category';
+      totalLabel.textContent = 'Summe';
+
+      totalLi.appendChild(totalLabel);
+      totalLi.appendChild(totalAmount);
+      container.appendChild(totalLi);
+    }
+  </script>
+  <div id="toast">Kopiert</div>
+</body>
+</html>
